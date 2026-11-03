@@ -7,6 +7,7 @@ import {
 import {
   RequestEvCaughtError,
   RequestEvHttpStatusMessage,
+  RequestEvSentServerError,
 } from '../middleware/request-handler/request-event-core';
 import { trimInternalPathname } from '../middleware/request-handler/request-path';
 import type { ServerRequestEvent } from '../middleware/request-handler/types';
@@ -335,20 +336,16 @@ export async function workerRender(
               }
               return completion;
             };
+            const failure = r ?? rsp.requestEv.sharedMap.get(RequestEvSentServerError);
             if (routeWriter) {
-              return closePromise.then(() => failRouteOnCaughtBoundary(r));
+              return closePromise.then(() => failRouteOnCaughtBoundary(failure));
             }
-            return failRouteOnCaughtBoundary(r);
+            return failRouteOnCaughtBoundary(failure);
           });
         }
       })
       .then((e: any) => {
         if (e !== undefined) {
-          if (isRedirectMessage(e)) {
-            // TODO We should render a html page for redirects too
-            // that would require refactoring redirects
-            return;
-          }
           if (e instanceof Error) {
             result.error = {
               message: e.message,
@@ -395,14 +392,6 @@ export async function workerRender(
 
 /** Create a fresh no-op WritableStream (must be a real instance for pipeTo checks). */
 const createNoopWritableStream = () => new WritableStream();
-
-function isRedirectMessage(value: unknown) {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { constructor?: { name?: string } }).constructor?.name === 'RedirectMessage'
-  );
-}
 
 async function requestHandlerForSsg<T>(
   serverRequestEv: ServerRequestEvent<T>,

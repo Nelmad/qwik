@@ -228,6 +228,7 @@ interface ElementFrame {
 }
 
 const noopStreamHandler: IStreamHandler = {
+  isFirstFlushHeld: false,
   flush() {},
   waitForPendingFlush() {},
   streamBlockStart() {},
@@ -342,6 +343,7 @@ class SSRContainer extends _SharedContainer implements ISSRContainer, Serializat
   private rootContainerReadyPromise: Promise<void> | null = null;
   private resolveRootContainerReady: (() => void) | null = null;
   private renderQueue: Promise<unknown> = Promise.resolve();
+  private scriptUnsafeEmits: (() => void)[] = [];
   private emittedQwikEventNames = new Set<string>();
   public emittedSyncFnCount = 0;
   private emittedVNodeDataOwners: Set<VNodeDataOwner> | null = null;
@@ -526,6 +528,14 @@ class SSRContainer extends _SharedContainer implements ISSRContainer, Serializat
       return;
     }
     this.write(scripts);
+  }
+
+  $emitWhenScriptSafe$(emit: () => void): void {
+    if (this.$noScriptHere$ > 0) {
+      this.scriptUnsafeEmits.push(emit);
+      return;
+    }
+    emit();
   }
 
   async segment(
@@ -714,6 +724,7 @@ class SSRContainer extends _SharedContainer implements ISSRContainer, Serializat
    */
   openContainer() {
     if (this.tag == 'html') {
+      this.streamHandler.isFirstFlushHeld = true;
       this.write('<!DOCTYPE html>');
     }
 
@@ -800,6 +811,7 @@ class SSRContainer extends _SharedContainer implements ISSRContainer, Serializat
     if (this.isHtml && elementName === 'body' && this.emitContainerDataFrame === null) {
       // For full document rendering emit before closing </body>.
       this.emitContainerDataFrame = this.currentElementFrame;
+      this.streamHandler.isFirstFlushHeld = false;
     }
     vNodeData_openElement(this.currentElementFrame!.vNodeData);
     this.write(LT);
@@ -895,7 +907,17 @@ class SSRContainer extends _SharedContainer implements ISSRContainer, Serializat
     // keep track of where to emit scripts
     if (NO_SCRIPT_HERE_ELEMENTS.has(elementName)) {
       this.$noScriptHere$--;
+      if (this.$noScriptHere$ === 0) {
+        this.drainScriptUnsafeEmits();
+      }
     }
+  }
+
+  private drainScriptUnsafeEmits(): void {
+    for (let i = 0; i < this.scriptUnsafeEmits.length; i++) {
+      this.scriptUnsafeEmits[i]();
+    }
+    this.scriptUnsafeEmits.length = 0;
   }
 
   /** Writes opening data to vNodeData for fragment boundaries */
